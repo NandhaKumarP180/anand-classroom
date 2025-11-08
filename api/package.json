@@ -1,0 +1,14 @@
+{
+  "name": "classroom-booking-api",
+  "version": "1.0.0",
+  "description": "Classroom Booking API",
+  "main": "simple-server.js",
+  "scripts": {
+    "start": "node simple-server.js",
+    "setup": "node setup-cosmos.js",
+    "seed": "node seed-db.js"
+  },
+  "dependencies": {
+    "@azure/cosmos": "^4.0.0"
+  }
+}
