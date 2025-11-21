@@ -93,9 +93,38 @@ const server = http.createServer(async (req, res) => {
     // GET /api/rooms
     if (method === 'GET' && pathname === '/api/rooms') {
       try {
-        const { resources: rooms } = await roomsContainer.items
+        // Try primary query
+        const initial = await roomsContainer.items
           .query('SELECT * FROM c')
           .fetchAll();
+        let rooms = initial.resources || [];
+
+        // If Cosmos is configured but empty, auto-seed with sample rooms
+        if (isCosmosConfigured && rooms.length === 0) {
+          try {
+            await ensureCosmosSchema();
+            const mock = require('./src/mockData');
+            const samples = mock.getAllRooms();
+            for (const r of samples) {
+              try { await roomsContainer.items.create(r); } catch (_) { /* ignore duplicate */ }
+            }
+            const afterSeed = await roomsContainer.items
+              .query('SELECT * FROM c')
+              .fetchAll();
+            rooms = (afterSeed.resources && afterSeed.resources.length > 0)
+              ? afterSeed.resources
+              : samples;
+          } catch (seedErr) {
+            // If seeding fails, respond with mock rooms so UI still works
+            rooms = require('./src/mockData').getAllRooms();
+          }
+        }
+
+        // If Cosmos not configured, return mock rooms immediately
+        if (!isCosmosConfigured && rooms.length === 0) {
+          rooms = require('./src/mockData').getAllRooms();
+        }
+
         res.writeHead(200, corsHeaders);
         res.end(JSON.stringify(rooms));
       } catch (e) {
@@ -105,8 +134,12 @@ const server = http.createServer(async (req, res) => {
             const { resources: rooms2 } = await roomsContainer.items
               .query('SELECT * FROM c')
               .fetchAll();
+            // If still empty, return mock to avoid empty UI
+            const safeRooms = (rooms2 && rooms2.length > 0)
+              ? rooms2
+              : require('./src/mockData').getAllRooms();
             res.writeHead(200, corsHeaders);
-            res.end(JSON.stringify(rooms2));
+            res.end(JSON.stringify(safeRooms));
           } else {
             const mock = require('./src/mockData');
             res.writeHead(200, corsHeaders);
