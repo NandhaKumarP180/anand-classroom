@@ -3,6 +3,7 @@ const http = require('http');
 const url = require('url');
 const fs = require('fs');
 const path = require('path');
+const { CosmosClient } = require('@azure/cosmos');
 
 const PORT = process.env.PORT || 7072;
 
@@ -16,6 +17,20 @@ if (fs.existsSync(settingsPath)) {
 // Import Cosmos client and validation
 const { roomsContainer, bookingsContainer, isCosmosConfigured } = require('./src/cosmosClient');
 const { validateBooking, checkConflict } = require('./src/utils/validation');
+
+const databaseId = process.env.COSMOS_DATABASE || 'classroom-booking';
+let cosmosSchemaEnsured = false;
+const ensureCosmosSchema = async () => {
+  if (cosmosSchemaEnsured) return;
+  if (!isCosmosConfigured) return;
+  const endpoint = process.env.COSMOS_ENDPOINT;
+  const key = process.env.COSMOS_KEY;
+  const client = new CosmosClient({ endpoint, key });
+  const { database } = await client.databases.createIfNotExists({ id: databaseId });
+  await database.containers.createIfNotExists({ id: 'rooms', partitionKey: { paths: ['/building'] } });
+  await database.containers.createIfNotExists({ id: 'bookings', partitionKey: { paths: ['/id'] } });
+  cosmosSchemaEnsured = true;
+};
 
 // Simple CORS headers
 const corsHeaders = {
@@ -56,11 +71,53 @@ const server = http.createServer(async (req, res) => {
   console.log(`${method} ${pathname}`);
 
   try {
+    if (method === 'GET' && pathname === '/api/health') {
+      let status = { ok: true, cosmos: isCosmosConfigured };
+      if (isCosmosConfigured) {
+        try {
+          await ensureCosmosSchema();
+          const { resources } = await roomsContainer.items
+            .query('SELECT TOP 1 * FROM c')
+            .fetchAll();
+          status.sample = resources.length;
+        } catch (e) {
+          status.ok = false;
+          status.error = e.message;
+        }
+      }
+      res.writeHead(200, corsHeaders);
+      res.end(JSON.stringify(status));
+      return;
+    }
+
     // GET /api/rooms
     if (method === 'GET' && pathname === '/api/rooms') {
-      const { resources: rooms } = await roomsContainer.items.query('SELECT * FROM c').fetchAll();
-      res.writeHead(200, corsHeaders);
-      res.end(JSON.stringify(rooms));
+      try {
+        const { resources: rooms } = await roomsContainer.items
+          .query('SELECT * FROM c')
+          .fetchAll();
+        res.writeHead(200, corsHeaders);
+        res.end(JSON.stringify(rooms));
+      } catch (e) {
+        try {
+          if (isCosmosConfigured) {
+            await ensureCosmosSchema();
+            const { resources: rooms2 } = await roomsContainer.items
+              .query('SELECT * FROM c')
+              .fetchAll();
+            res.writeHead(200, corsHeaders);
+            res.end(JSON.stringify(rooms2));
+          } else {
+            const mock = require('./src/mockData');
+            res.writeHead(200, corsHeaders);
+            res.end(JSON.stringify(mock.getAllRooms()));
+          }
+        } catch (e2) {
+          const mock = require('./src/mockData');
+          res.writeHead(200, corsHeaders);
+          res.end(JSON.stringify(mock.getAllRooms()));
+        }
+      }
       return;
     }
 
